@@ -21,10 +21,3 @@ The code and examples here expects you to have some fundamental programming know
 
 # Guides
 - [Dataplatform](./dataplatform/README.md)
-
-<br><br><br><br>
-## For developers on this repository
-Register this filter to automatically clear output from Jupyter notebooks when committing them to the repository.
-``` bash
-git config filter.strip-notebook-output.clean 'jupyter nbconvert --ClearOutputPreprocessor.enabled=True --to=notebook --stdin --stdout --log-level=ERROR'  
-```
