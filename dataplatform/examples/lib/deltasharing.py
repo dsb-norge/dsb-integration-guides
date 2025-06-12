@@ -45,11 +45,15 @@ def pandas_dump_tables(
     """
     Load Delta Sharing tables as Pandas DataFrames and save them to disk.
     """
-
+    import time
     for url in table_urls:
+        start_time = time.time()
+        print(f"Loading table: {url}")
         df = load_as_pandas(url=url)
         # Create the data folder if it doesn't exist
         import os
         os.makedirs(data_folder, exist_ok=True)
         # Save the DataFrame to a Parquet file
         df.to_parquet(f"{data_folder}/{'.'.join(url.split('#')[1:])}.parquet")
+        end_time = time.time()
+        print(f"Table {url} loaded in {end_time - start_time:.2f} seconds.")
