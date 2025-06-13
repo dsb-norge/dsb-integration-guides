@@ -1,0 +1,7 @@
+requests
+PyJWT
+jwcrypto
+delta-sharing
+numpy>=2.0.0  # Version specified to as databricks-connect will install a old version
+pandas>=2.2.3 # Version specified to as databricks-connect will install a old version
+databricks-connect
