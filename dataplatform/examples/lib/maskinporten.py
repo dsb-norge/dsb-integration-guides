@@ -51,7 +51,7 @@ def get_maskinporten_access_token(
     scope: str,
     resource: str,
     # Certificate parameters
-    private_key: str
+    private_key: bytes
 ) -> str:
     """
     Get access token from Maskinporten

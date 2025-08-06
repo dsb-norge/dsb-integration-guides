@@ -41,6 +41,8 @@ def get_table_urls(profile: str, sharing_client: SharingClient):
 def pandas_dump_tables(
         table_urls: List[str],
         data_folder: str = "data",
+        format: str = "parquet",
+        csv_separator: str = ","
 ):
     """
     Load Delta Sharing tables as Pandas DataFrames and save them to disk.
@@ -55,7 +57,25 @@ def pandas_dump_tables(
         # Create the data folder if it doesn't exist
         import os
         os.makedirs(data_folder, exist_ok=True)
-        # Save the DataFrame to a Parquet file
-        df.to_parquet(f"{data_folder}/{table_name}.parquet")
+        # Save the DataFrame to disk
+        if format == "csv":
+            df.to_csv(
+                path_or_buf=f"{data_folder}/{table_name}.csv",
+                sep=csv_separator,
+                index=False
+            )
+        elif format == "parquet":
+            df.to_parquet(
+                path=f"{data_folder}/{table_name}.parquet",
+            )
+        elif format == "excel":
+            # Remove timezone from datetime columns
+            for col in df.select_dtypes(include=['datetime64[ns, UTC]']).columns:
+                df[col] = df[col].dt.tz_localize(None)
+            # Save to Excel
+            df.to_excel(
+                excel_writer=f"{data_folder}/{table_name}.xlsx",
+                index=False
+            )
         end_time = time.time()
         print(f"Completed in {end_time - start_time:.2f} seconds.\n")
