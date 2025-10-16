@@ -34,6 +34,7 @@ class DsbDataApiRequest:
         self.base_url = base_url
         self.token_provider = token_provider
         self._format: str = "parquet"
+        self._page_size: int | None = None
         self._select: list[str] = []
         self._order_by: list[str] = []
         self._filters: list[tuple[str, str, str]] = []
@@ -56,6 +57,11 @@ class DsbDataApiRequest:
     def filter(self, *filters: tuple[str, str, str]) -> DsbDataApiRequest:
         """Filter the results based on the specified criteria."""
         self._filters.extend(filters)
+        return self
+    
+    def page_size(self, size: int) -> DsbDataApiRequest:
+        """Set the number of results to return per page."""
+        self._page_size = size
         return self
 
     def collect(self) -> requests.Response:
