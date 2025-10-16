@@ -21,3 +21,4 @@ The code and examples here expects you to have some fundamental programming know
 
 # Guides
 - [Dataplatform](./dataplatform/README.md)
+- [Data API](./data-api/README.md)
