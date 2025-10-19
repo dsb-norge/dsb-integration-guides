@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+import logging
 
 class DsbDataApiClient:
     def __init__(
@@ -17,14 +18,17 @@ class DsbDataApiClient:
         if not self.base_url.endswith("/api/v1"):
             self.base_url = f"{self.base_url}/api/v1"
         self.token_provider = MaskinportenTokenProvider(auth_config)
+        # Logging setup
+        self.log = logging.getLogger(__name__)
+        self.log.setLevel(logging.DEBUG)
 
     def get_dataset(self, dataset_name: str, full: bool = True) -> DsbDataApiRequest:
         return DsbDataApiRequest(
             dataset_url=f"{self.base_url}/datasets/{dataset_name}",
             full=full,
-            bearer_token=self.token_provider.get_token()
+            bearer_token=self.token_provider.get_token(),
+            logger=self.log
         )
-    
     
 class DsbDataApiRequest:
     def __init__(
@@ -32,6 +36,7 @@ class DsbDataApiRequest:
         dataset_url: str,
         full: bool,
         bearer_token: str,
+        logger: logging.Logger | None = None
     ):
         self.dataset_url = dataset_url
         self.bearer_token = bearer_token
@@ -42,6 +47,7 @@ class DsbDataApiRequest:
         self._exclude: list[str] = []
         self._order_by: list[str] = []
         self._filters: list[tuple[str, str, str]] = []
+        self.log = logger or logging.getLogger(__name__)
 
     def format(self, value: str) -> str:
         """Format a value for use in a query."""
@@ -54,6 +60,11 @@ class DsbDataApiRequest:
         """Set the number of results to return per page."""
         self._top = size
         return self
+    
+    def page_size(self, size: int) -> DsbDataApiRequest:
+        """Set the number of results to return per page. (Alias for top())"""
+        self.top(size)
+        return self
 
     def skip(self, count: int) -> DsbDataApiRequest:
         """Set the number of results to skip."""
@@ -61,13 +72,13 @@ class DsbDataApiRequest:
         return self
 
     def select(self, *fields: str) -> DsbDataApiRequest:
-        """Specify which columns to select from the dataset."""
+        """Specify which columns to select from the dataset. Cannot be used together with exclude()."""
         assert not self._exclude, "Cannot use select and exclude together."
         self._select.extend(fields)
         return self
 
     def exclude(self, *fields: str) -> DsbDataApiRequest:
-        """Specify which columns to exclude from the dataset."""
+        """Specify which columns to exclude from the dataset. Cannot be used together with select()."""
         assert not self._select, "Cannot use select and exclude together."
         self._exclude.extend(fields)
         return self
@@ -103,29 +114,55 @@ class DsbDataApiRequest:
             filter_expressions = [f"{field} {op} '{value}'" for field, op, value in self._filters]
             params["$filter"] = " and ".join(filter_expressions)
 
-        print("Headers:", headers)
-        print(f"Requesting data from {url} with params {params}")
-
         # Fetch all pages
         responses = []
         max_retries = 2
         current_retry = 0
         total_retries = 0
+        current_page = 1
         while True:
+            if len(responses) == 0:
+                self.log.info(f"Fetching page from {url} with params {params}")
+            else:
+                self.log.info(f"Fetching next page from {url} with params {params} (total retries so far: {total_retries})")
+
             response = requests.get(url, headers=headers, params=params)
-            print(f"Response status code: {response.status_code}")
             responses.append(response)
             if response.status_code != 200:
+                self.log.error(f"Request failed with status code {response.status_code}\n: { response.json()}")
                 if current_retry < max_retries:
                     current_retry += 1
                     total_retries += 1
                     continue
                 raise Exception(f"Request failed with status code {response.status_code}\n: { response.json()}")
+            
+            # If not fetching full dataset, break after first page
             if not self.full:
                 break
+            
+            if "X-Total-Pages" in response.headers:
+                total_pages = int(response.headers.get("X-Total-Pages", "1"))
+                self.log.info(f"Current page: {current_page} / {total_pages}")
+                current_page += 1
 
-            if response.headers.get("X-Current-Page") != response.headers.get("X-Total-Pages"):
+            # Pagination strategy #1: Using Link header
+            if response.headers.get("Link") is not None:
+                links = str(response.headers.get("Link")).split(",")
+                next_link = None
+                for link in links:
+                    parts = link.split(";")
+                    if len(parts) > 1 and 'rel="next"' in parts[1]:
+                        next_link = parts[0].strip("<> ")
+                        break
+                if next_link:
+                    params["$skip"] = next_link.split("$skip=")[-1].split("&")[0] # Keep track of $skip value from next link in-case something goes wrong where the api dont return next link when it should
+                    url = next_link
+                else:
+                    break
+            # Pagination strategy #2: Using X-Current-Page and X-Total-Pages headers
+            elif response.headers.get("X-Current-Page") != response.headers.get("X-Total-Pages"):
                 params["$skip"] = str(int(params.get("$skip", "0")) + int(params.get("$top", "1000")))
+            # No more pages
             else:
                 break
             current_retry = 0  # Reset retry counter on successful request
