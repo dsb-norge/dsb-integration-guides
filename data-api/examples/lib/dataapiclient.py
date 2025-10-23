@@ -8,13 +8,16 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import logging
 
+
 class DsbDataApiClient:
     def __init__(
-            self,
-            base_url: str | None = None,
-            auth_config: dict | None = None,
-        ):
-        self.base_url = base_url or os.getenv("DSB_DATA_API_BASE_URL", "https://data.dsb.no/api/v1")
+        self,
+        base_url: str | None = None,
+        auth_config: dict | None = None,
+    ):
+        self.base_url = base_url or os.getenv(
+            "DSB_DATA_API_BASE_URL", "https://data.dsb.no/api/v1"
+        )
         if not self.base_url.endswith("/api/v1"):
             self.base_url = f"{self.base_url}/api/v1"
         self.token_provider = MaskinportenTokenProvider(auth_config)
@@ -27,16 +30,17 @@ class DsbDataApiClient:
             dataset_url=f"{self.base_url}/datasets/{dataset_name}",
             full=full,
             bearer_token=self.token_provider.get_token(),
-            logger=self.log
+            logger=self.log,
         )
-    
+
+
 class DsbDataApiRequest:
     def __init__(
         self,
         dataset_url: str,
         full: bool,
         bearer_token: str,
-        logger: logging.Logger | None = None
+        logger: logging.Logger | None = None,
     ):
         self.dataset_url = dataset_url
         self.bearer_token = bearer_token
@@ -45,22 +49,15 @@ class DsbDataApiRequest:
         self._skip: int | None = None
         self._select: list[str] = []
         self._exclude: list[str] = []
-        self._order_by: list[str] = []
+        self._order_by: list[tuple[str, str | None]] = []
         self._filters: list[tuple[str, str, str]] = []
         self.log = logger or logging.getLogger(__name__)
-
-    def format(self, value: str) -> str:
-        """Format a value for use in a query."""
-        if value not in ["parquet", "json", "csv", "xml"]:
-            raise ValueError(f"Invalid format: {value}")
-        self._format = value
-        return str(value)
 
     def top(self, size: int) -> DsbDataApiRequest:
         """Set the number of results to return per page."""
         self._top = size
         return self
-    
+
     def page_size(self, size: int) -> DsbDataApiRequest:
         """Set the number of results to return per page. (Alias for top())"""
         self.top(size)
@@ -83,22 +80,51 @@ class DsbDataApiRequest:
         self._exclude.extend(fields)
         return self
 
-    def order_by(self, *fields: str) -> DsbDataApiRequest:
-        """Specify the order in which to return the results."""
-        self._order_by.extend(fields)
+    def order_by(self, *fields: str | tuple[str, str]) -> DsbDataApiRequest:
+        """Specify the order in which to return the results.
+
+        Args:
+            *fields: Can be either:
+                - String: column name (defaults to ascending order)
+                - Tuple: (column_name, direction) where direction is 'asc', 'desc', or None
+
+        Examples:
+            .order_by("name")  # name ascending
+            .order_by("name", "age")  # name asc, age asc
+            .order_by(("name", "desc"), "age")  # name desc, age asc
+            .order_by(("name", "desc"), ("age", "asc"))  # name desc, age asc
+        """
+        processed_fields = []
+
+        for field in fields:
+            if isinstance(field, str):
+                # Simple string field - default use default direction of the api
+                processed_fields.append((field, None))
+            elif isinstance(field, tuple) and len(field) == 2:
+                # Tuple with (field, direction)
+                field_name, direction = field
+                if direction.lower() not in ["asc", "desc"]:
+                    raise ValueError(
+                        f"Invalid order direction: {direction}. Must be 'asc', 'desc', or None."
+                    )
+                processed_fields.append((field_name, direction))
+            else:
+                raise ValueError(
+                    f"Invalid field format: {field}. Must be string or tuple of (field_name, direction)."
+                )
+
+        self._order_by.extend(processed_fields)
         return self
 
     def filter(self, *filters: tuple[str, str, str]) -> DsbDataApiRequest:
         """Filter the results based on the specified criteria."""
         self._filters.extend(filters)
         return self
-    
+
     def collect(self) -> DsbDataApiResponse:
         # Setup request
         url = f"{self.dataset_url}"
-        headers = {
-            "Authorization": f"Bearer {self.bearer_token}"
-        }
+        headers = {"Authorization": f"Bearer {self.bearer_token}"}
         params = {}
         if self._top:
             params["$top"] = str(self._top)
@@ -109,9 +135,16 @@ class DsbDataApiRequest:
         if self._exclude:
             params["$exclude"] = ",".join(self._exclude)
         if self._order_by:
-            params["$order_by"] = ",".join(self._order_by)
+            params["$orderby"] = ",".join(
+                [
+                    f"{field} {direction}" if direction else field
+                    for field, direction in self._order_by
+                ]
+            )
         if self._filters:
-            filter_expressions = [f"{field} {op} '{value}'" for field, op, value in self._filters]
+            filter_expressions = [
+                f"{field} {op} '{value}'" for field, op, value in self._filters
+            ]
             params["$filter"] = " and ".join(filter_expressions)
 
         # Fetch all pages
@@ -124,22 +157,29 @@ class DsbDataApiRequest:
             if len(responses) == 0:
                 self.log.info(f"Fetching page from {url} with params {params}")
             else:
-                self.log.info(f"Fetching next page from {url} with params {params} (total retries so far: {total_retries})")
+                message = f"Fetching next page from {url} with params {params}"
+                if total_retries > 0:
+                    message += f" (total retries so far: {total_retries + 1})"
+                self.log.info(message)
 
             response = requests.get(url, headers=headers, params=params)
             responses.append(response)
             if response.status_code != 200:
-                self.log.error(f"Request failed with status code {response.status_code}\n: { response.json()}")
+                self.log.error(
+                    f"Request failed with status code {response.status_code}\n: {response.json()}"
+                )
                 if current_retry < max_retries:
                     current_retry += 1
                     total_retries += 1
                     continue
-                raise Exception(f"Request failed with status code {response.status_code}\n: { response.json()}")
-            
+                raise Exception(
+                    f"Request failed with status code {response.status_code}\n: {response.json()}"
+                )
+
             # If not fetching full dataset, break after first page
             if not self.full:
                 break
-            
+
             if "X-Total-Pages" in response.headers:
                 total_pages = int(response.headers.get("X-Total-Pages", "1"))
                 self.log.info(f"Current page: {current_page} / {total_pages}")
@@ -155,13 +195,19 @@ class DsbDataApiRequest:
                         next_link = parts[0].strip("<> ")
                         break
                 if next_link:
-                    params["$skip"] = next_link.split("$skip=")[-1].split("&")[0] # Keep track of $skip value from next link in-case something goes wrong where the api dont return next link when it should
+                    params["$skip"] = next_link.split("$skip=")[-1].split("&")[
+                        0
+                    ]  # Keep track of $skip value from next link in-case something goes wrong where the api dont return next link when it should
                     url = next_link
                 else:
                     break
             # Pagination strategy #2: Using X-Current-Page and X-Total-Pages headers
-            elif response.headers.get("X-Current-Page") != response.headers.get("X-Total-Pages"):
-                params["$skip"] = str(int(params.get("$skip", "0")) + int(params.get("$top", "1000")))
+            elif response.headers.get("X-Current-Page") != response.headers.get(
+                "X-Total-Pages"
+            ):
+                params["$skip"] = str(
+                    int(params.get("$skip", "0")) + int(params.get("$top", "1000"))
+                )
             # No more pages
             else:
                 break
@@ -169,25 +215,19 @@ class DsbDataApiRequest:
 
         # Combine responses
         parquet_blobs = [r.content for r in responses if r.status_code == 200]
-        tables = [
-            pq.read_table(io.BytesIO(b))
-            for b in parquet_blobs
-        ]
+        tables = [pq.read_table(io.BytesIO(b)) for b in parquet_blobs]
         combined_table = pa.concat_tables(tables)
-        
-        return DsbDataApiResponse(
-            df=combined_table.to_pandas()
-        )
+
+        return DsbDataApiResponse(df=combined_table.to_pandas())
+
 
 class DsbDataApiResponse:
-    def __init__(
-        self,
-        df: pd.DataFrame
-    ):
+    def __init__(self, df: pd.DataFrame):
         self.df = df
 
     def to_dataframe(self) -> pd.DataFrame:
         return self.df
+
 
 class DsbDataApiTokenProvider(ABC):
     @abstractmethod
@@ -199,6 +239,7 @@ class DsbDataApiTokenProvider(ABC):
         """Get a token for accessing the DSB Data API."""
         pass
 
+
 class MaskinportenTokenProvider(DsbDataApiTokenProvider):
     requires = [
         "DSB_DATA_API_AUTH_MASKINPORTEN_CLIENT_KEY_ID",
@@ -206,12 +247,12 @@ class MaskinportenTokenProvider(DsbDataApiTokenProvider):
         "DSB_DATA_API_AUTH_MASKINPORTEN_AUDIENCE",
         "DSB_DATA_API_AUTH_MASKINPORTEN_SCOPE",
         "DSB_DATA_API_AUTH_MASKINPORTEN_RESOURCE",
-        "DSB_DATA_API_AUTH_MASKINPORTEN_CLIENT_PRIVATE_KEY_PATH"
+        "DSB_DATA_API_AUTH_MASKINPORTEN_CLIENT_PRIVATE_KEY_PATH",
     ]
 
     def __init__(self, config: dict | None = None):
         self.config = config or {}
-        
+
         for key in self.requires:
             if self.config.get(key) is None:
                 val = os.getenv(key)
@@ -224,11 +265,17 @@ class MaskinportenTokenProvider(DsbDataApiTokenProvider):
 
     def get_token(self) -> str:
         from lib.maskinporten import get_access_token
+
         return get_access_token(
             key_id=self.config.get("DSB_DATA_API_AUTH_MASKINPORTEN_CLIENT_KEY_ID", ""),
             client_id=self.config.get("DSB_DATA_API_AUTH_MASKINPORTEN_CLIENT_ID", ""),
             audience=self.config.get("DSB_DATA_API_AUTH_MASKINPORTEN_AUDIENCE", ""),
             scope=self.config.get("DSB_DATA_API_AUTH_MASKINPORTEN_SCOPE", ""),
             resource=self.config.get("DSB_DATA_API_AUTH_MASKINPORTEN_RESOURCE", ""),
-            private_key=open(self.config.get("DSB_DATA_API_AUTH_MASKINPORTEN_CLIENT_PRIVATE_KEY_PATH", ""), "rb").read()
+            private_key=open(
+                self.config.get(
+                    "DSB_DATA_API_AUTH_MASKINPORTEN_CLIENT_PRIVATE_KEY_PATH", ""
+                ),
+                "rb",
+            ).read(),
         )
