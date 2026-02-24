@@ -20,4 +20,4 @@ The code and examples here expects you to have some fundamental programming know
 <br>Our goal is that it should be easy for programmers to follow, and possible for technically inclined users to use with a little effort.
 
 # Guides
-- [Dataplatform](./dataplatform/README.md)
+- [Data API](./data-api/README.md)
