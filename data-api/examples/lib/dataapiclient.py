@@ -8,15 +8,50 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import logging
 
+# Environment variable keys
+ENV_BASE_URL = "DSB_DATA_API_BASE_URL"
+ENV_MASKINPORTEN_CLIENT_KEY_ID = "DSB_DATA_API_MASKINPORTEN_CLIENT_KEY_ID"
+ENV_MASKINPORTEN_CLIENT_ID = "DSB_DATA_API_MASKINPORTEN_CLIENT_ID"
+ENV_MASKINPORTEN_SCOPE = "DSB_DATA_API_MASKINPORTEN_SCOPE"
+ENV_MASKINPORTEN_AUDIENCE = "DSB_DATA_API_MASKINPORTEN_AUDIENCE"
+ENV_MASKINPORTEN_RESOURCE = "DSB_DATA_API_MASKINPORTEN_RESOURCE"
+ENV_MASKINPORTEN_PRIVATE_KEY_PATH = "DSB_DATA_API_MASKINPORTEN_CLIENT_PRIVATE_KEY_PATH"
+
 
 class DsbDataApiClient:
+    """Client for querying datasets from the DSB Data API.
+
+    Authenticates via Maskinporten and provides a fluent interface for building
+    dataset queries with filtering, pagination, sorting, and column selection.
+
+    Args:
+        base_url: API base URL. Defaults to the ``DSB_DATA_API_BASE_URL``
+            environment variable, or ``https://data.dsb.no/api/v1``.
+        auth_config: Dict of Maskinporten configuration values. Any missing
+            keys are read from environment variables. See
+            ``MaskinportenTokenProvider.requires`` for the full list.
+
+    Example::
+
+        client = DsbDataApiClient()
+        df = (
+            client.get_dataset("my_dataset")
+            .select("col_a", "col_b")
+            .filter(("col_a", "eq", "some_value"))
+            .order_by(("col_b", "desc"))
+            .top(100)
+            .collect()
+            .to_dataframe()
+        )
+    """
+
     def __init__(
         self,
         base_url: str | None = None,
         auth_config: dict | None = None,
     ):
         self.base_url = base_url or os.getenv(
-            "DSB_DATA_API_BASE_URL", "https://data.dsb.no/api/v1"
+            ENV_BASE_URL, "https://data.dsb.no/api/v1"
         )
         if not self.base_url.endswith("/api/v1"):
             self.base_url = f"{self.base_url}/api/v1"
@@ -26,6 +61,17 @@ class DsbDataApiClient:
         self.log.setLevel(logging.DEBUG)
 
     def get_dataset(self, dataset_name: str, full: bool = True) -> DsbDataApiRequest:
+        """Start building a request for a dataset.
+
+        Args:
+            dataset_name: Name of the dataset to query.
+            full: If ``True`` (default), automatically fetches all pages.
+                If ``False``, only the first page is returned.
+
+        Returns:
+            A ``DsbDataApiRequest`` that can be refined with filters,
+            sorting, etc. before calling ``.collect()``.
+        """
         return DsbDataApiRequest(
             dataset_url=f"{self.base_url}/datasets/{dataset_name}",
             full=full,
@@ -242,12 +288,12 @@ class DsbDataApiTokenProvider(ABC):
 
 class MaskinportenTokenProvider(DsbDataApiTokenProvider):
     requires = [
-        "DSB_DATA_API_AUTH_MASKINPORTEN_CLIENT_KEY_ID",
-        "DSB_DATA_API_AUTH_MASKINPORTEN_CLIENT_ID",
-        "DSB_DATA_API_AUTH_MASKINPORTEN_AUDIENCE",
-        "DSB_DATA_API_AUTH_MASKINPORTEN_SCOPE",
-        "DSB_DATA_API_AUTH_MASKINPORTEN_RESOURCE",
-        "DSB_DATA_API_AUTH_MASKINPORTEN_CLIENT_PRIVATE_KEY_PATH",
+        ENV_MASKINPORTEN_CLIENT_KEY_ID,
+        ENV_MASKINPORTEN_CLIENT_ID,
+        ENV_MASKINPORTEN_SCOPE,
+        ENV_MASKINPORTEN_AUDIENCE,
+        ENV_MASKINPORTEN_RESOURCE,
+        ENV_MASKINPORTEN_PRIVATE_KEY_PATH,
     ]
 
     def __init__(self, config: dict | None = None):
@@ -267,15 +313,13 @@ class MaskinportenTokenProvider(DsbDataApiTokenProvider):
         from lib.maskinporten import get_access_token
 
         return get_access_token(
-            key_id=self.config.get("DSB_DATA_API_AUTH_MASKINPORTEN_CLIENT_KEY_ID", ""),
-            client_id=self.config.get("DSB_DATA_API_AUTH_MASKINPORTEN_CLIENT_ID", ""),
-            audience=self.config.get("DSB_DATA_API_AUTH_MASKINPORTEN_AUDIENCE", ""),
-            scope=self.config.get("DSB_DATA_API_AUTH_MASKINPORTEN_SCOPE", ""),
-            resource=self.config.get("DSB_DATA_API_AUTH_MASKINPORTEN_RESOURCE", ""),
+            key_id=self.config.get(ENV_MASKINPORTEN_CLIENT_KEY_ID, ""),
+            client_id=self.config.get(ENV_MASKINPORTEN_CLIENT_ID, ""),
+            audience=self.config.get(ENV_MASKINPORTEN_AUDIENCE, ""),
+            scope=self.config.get(ENV_MASKINPORTEN_SCOPE, ""),
+            resource=self.config.get(ENV_MASKINPORTEN_RESOURCE, ""),
             private_key=open(
-                self.config.get(
-                    "DSB_DATA_API_AUTH_MASKINPORTEN_CLIENT_PRIVATE_KEY_PATH", ""
-                ),
+                self.config.get(ENV_MASKINPORTEN_PRIVATE_KEY_PATH, ""),
                 "rb",
             ).read(),
         )
