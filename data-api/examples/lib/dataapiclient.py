@@ -75,7 +75,7 @@ class DsbDataApiClient:
         return DsbDataApiRequest(
             dataset_url=f"{self.base_url}/datasets/{dataset_name}",
             full=full,
-            bearer_token=self.token_provider.get_token(),
+            token_provider=self.token_provider,
             logger=self.log,
         )
 
@@ -85,11 +85,11 @@ class DsbDataApiRequest:
         self,
         dataset_url: str,
         full: bool,
-        bearer_token: str,
+        token_provider: DsbDataApiTokenProvider,
         logger: logging.Logger | None = None,
     ):
         self.dataset_url = dataset_url
-        self.bearer_token = bearer_token
+        self.token_provider = token_provider
         self.full = full
         self._top: int | None = None
         self._skip: int | None = None
@@ -170,7 +170,6 @@ class DsbDataApiRequest:
     def collect(self) -> DsbDataApiResponse:
         # Setup request
         url = f"{self.dataset_url}"
-        headers = {"Authorization": f"Bearer {self.bearer_token}"}
         params = {}
         if self._top:
             params["$top"] = str(self._top)
@@ -208,6 +207,9 @@ class DsbDataApiRequest:
                     message += f" (total retries so far: {total_retries + 1})"
                 self.log.info(message)
 
+            # Fetch a fresh token for every request, since Maskinporten tokens
+            # are short-lived (~2 minutes) and can expire mid-pagination.
+            headers = {"Authorization": f"Bearer {self.token_provider.get_token()}"}
             response = requests.get(url, headers=headers, params=params)
             responses.append(response)
             if response.status_code != 200:
